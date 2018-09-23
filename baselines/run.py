@@ -13,7 +13,6 @@ from baselines import bench, logger
 from importlib import import_module
 
 from baselines.common.vec_env.vec_normalize import VecNormalize
-from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
 from baselines.common import atari_wrappers, retro_wrappers
 
 try:
@@ -21,9 +20,19 @@ try:
 except ImportError:
     MPI = None
 
+try:
+    import pybullet_envs
+except ImportError:
+    pybullet_envs = None
+
+try:
+    import roboschool
+except ImportError:
+    roboschool = None
+
 _game_envs = defaultdict(set)
 for env in gym.envs.registry.all():
-    # solve this with regexes
+    # TODO: solve this with regexes
     env_type = env._entry_point.split(':')[0].split('.')[-1]
     _game_envs[env_type].add(env.id)
 
@@ -44,6 +53,7 @@ _game_envs['retro'] = {
 
 def train(args, extra_args):
     env_type, env_id = get_env_type(args.env)
+    print('env_type: {}'.format(env_type))
 
     total_timesteps = int(args.num_timesteps)
     seed = args.seed
@@ -81,19 +91,8 @@ def build_env(args):
     seed = args.seed
 
     env_type, env_id = get_env_type(args.env)
-    if env_type == 'mujoco':
-        get_session(tf.ConfigProto(allow_soft_placement=True,
-                                   intra_op_parallelism_threads=1,
-                                   inter_op_parallelism_threads=1))
 
-        if args.num_env:
-            env = make_vec_env(env_id, env_type, nenv, seed, reward_scale=args.reward_scale)
-        else:
-            env = make_vec_env(env_id, env_type, 1, seed, reward_scale=args.reward_scale)
-
-        env = VecNormalize(env)
-
-    elif env_type == 'atari':
+    if env_type == 'atari':
         if alg == 'acer':
             env = make_vec_env(env_id, env_type, nenv, seed)
         elif alg == 'deepq':
@@ -121,17 +120,15 @@ def build_env(args):
         env = bench.Monitor(env, logger.get_dir())
         env = retro_wrappers.wrap_deepmind_retro(env)
 
-    elif env_type == 'classic_control':
-        def make_env():
-            e = gym.make(env_id)
-            e = bench.Monitor(e, logger.get_dir(), allow_early_resets=True)
-            e.seed(seed)
-            return e
-
-        env = DummyVecEnv([make_env])
-
     else:
-        raise ValueError('Unknown env_type {}'.format(env_type))
+       get_session(tf.ConfigProto(allow_soft_placement=True,
+                                   intra_op_parallelism_threads=1,
+                                   inter_op_parallelism_threads=1))
+
+       env = make_vec_env(env_id, env_type, args.num_env or 1, seed, reward_scale=args.reward_scale)
+
+       if env_type == 'mujoco':
+           env = VecNormalize(env)
 
     return env
 
@@ -152,13 +149,10 @@ def get_env_type(env_id):
 
 
 def get_default_network(env_type):
-    if env_type == 'mujoco' or env_type == 'classic_control':
-        return 'mlp'
     if env_type == 'atari':
         return 'cnn'
-
-    raise ValueError('Unknown env_type {}'.format(env_type))
-
+    else:
+        return 'mlp'
 
 def get_alg_module(alg, submodule=None):
     submodule = submodule or alg
@@ -185,16 +179,21 @@ def get_learn_function_defaults(alg, env_type):
     return kwargs
 
 
-def parse(v):
-    '''
-    convert value of a command-line arg to a python object if possible, othewise, keep as string
-    '''
 
-    assert isinstance(v, str)
-    try:
-        return eval(v)
-    except (NameError, SyntaxError):
-        return v
+def parse_cmdline_kwargs(args):
+    '''
+    convert a list of '='-spaced command-line arguments to a dictionary, evaluating python objects when possible
+    '''
+    def parse(v):
+
+        assert isinstance(v, str)
+        try:
+            return eval(v)
+        except (NameError, SyntaxError):
+            return v
+
+    return {k: parse(v) for k,v in parse_unknown_args(args).items()}
+
 
 
 def main():
@@ -202,7 +201,7 @@ def main():
 
     arg_parser = common_arg_parser()
     args, unknown_args = arg_parser.parse_known_args()
-    extra_args = {k: parse(v) for k, v in parse_unknown_args(unknown_args).items()}
+    extra_args = parse_cmdline_kwargs(unknown_args)
 
     if MPI is None or MPI.COMM_WORLD.Get_rank() == 0:
         rank = 0
@@ -211,7 +210,8 @@ def main():
         logger.configure(format_strs=[])
         rank = MPI.COMM_WORLD.Get_rank()
 
-    model, _ = train(args, extra_args)
+    model, env = train(args, extra_args)
+    env.close()
 
     if args.save_path is not None and rank == 0:
         save_path = osp.expanduser(args.save_path)
@@ -221,8 +221,11 @@ def main():
         logger.log("Running trained model")
         env = build_env(args)
         obs = env.reset()
+        def initialize_placeholders(nlstm=128,**kwargs):
+            return np.zeros((args.num_env or 1, 2*nlstm)), np.zeros((1))
+        state, dones = initialize_placeholders(**extra_args)
         while True:
-            actions = model.step(obs)[0]
+            actions, _, state, _ = model.step(obs,S=state, M=dones)
             obs, _, done, _ = env.step(actions)
             env.render()
             done = done.any() if isinstance(done, np.ndarray) else done
@@ -230,6 +233,7 @@ def main():
             if done:
                 obs = env.reset()
 
+        env.close()
 
 if __name__ == '__main__':
     main()

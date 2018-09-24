@@ -61,7 +61,7 @@ def train(args, extra_args):
     learn = get_learn_function(args.alg)
     alg_kwargs = get_learn_function_defaults(args.alg, env_type)
     alg_kwargs.update(extra_args)
-
+    
     env = build_env(args)
 
     if args.network:
@@ -70,7 +70,7 @@ def train(args, extra_args):
         if alg_kwargs.get('network') is None:
             alg_kwargs['network'] = get_default_network(env_type)
 
-    print('Training {} on {}:{} with arguments \n{}'.format(args.alg, env_type, env_id, alg_kwargs))
+    logger.log('Training {} on {}:{} with arguments \n{}'.format(args.alg, env_type, env_id, alg_kwargs))
 
     model = learn(
         env=env,
@@ -125,7 +125,7 @@ def build_env(args):
                                    intra_op_parallelism_threads=1,
                                    inter_op_parallelism_threads=1))
 
-       env = make_vec_env(env_id, env_type, args.num_env or 1, seed, reward_scale=args.reward_scale)
+       env = make_vec_env(env_id, env_type, args.num_env or 1, seed, reward_scale=args.reward_scale,env_args=args)
 
        if env_type == 'mujoco':
            env = VecNormalize(env)
@@ -143,6 +143,8 @@ def get_env_type(env_id):
             if env_id in e:
                 env_type = g
                 break
+        if env_id.split('.')[0].lower()=='vrepgym':
+            env_type = 'vrep'
         assert env_type is not None, 'env_id {} is not recognized in env types'.format(env_id, _game_envs.keys())
 
     return env_type, env_id
@@ -202,7 +204,6 @@ def main():
     arg_parser = common_arg_parser()
     args, unknown_args = arg_parser.parse_known_args()
     extra_args = parse_cmdline_kwargs(unknown_args)
-
     if MPI is None or MPI.COMM_WORLD.Get_rank() == 0:
         rank = 0
         logger.configure()
@@ -211,19 +212,23 @@ def main():
         rank = MPI.COMM_WORLD.Get_rank()
 
     model, env = train(args, extra_args)
-    env.close()
-
+    
     if args.save_path is not None and rank == 0:
         save_path = osp.expanduser(args.save_path)
         model.save(save_path)
 
+    if not args.play:
+        print('Finished training. Closing Environment')
+        env.close()
+    
     if args.play:
-        logger.log("Running trained model")
+        print("Running trained model")
         env = build_env(args)
         obs = env.reset()
         def initialize_placeholders(nlstm=128,**kwargs):
             return np.zeros((args.num_env or 1, 2*nlstm)), np.zeros((1))
         state, dones = initialize_placeholders(**extra_args)
+        play_times = 5
         while True:
             actions, _, state, _ = model.step(obs,S=state, M=dones)
             obs, _, done, _ = env.step(actions)
@@ -231,8 +236,11 @@ def main():
             done = done.any() if isinstance(done, np.ndarray) else done
 
             if done:
+                if play_times==0:
+                    break
                 obs = env.reset()
-
+                play_times-=1
+        print('Finished running. Closing Environment')
         env.close()
 
 if __name__ == '__main__':

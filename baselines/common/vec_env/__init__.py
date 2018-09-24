@@ -74,11 +74,12 @@ class VecEnv(ABC):
          - infos: a sequence of info objects
         """
         pass
-
+    @abstractmethod
     def close_extras(self):
         """
         Clean up the  extra resources, beyond what's in this base class.
-        Only runs when not self.closed.
+        Only runs when not self.closed
+        Close the underlying wrapped environment
         """
         pass
 

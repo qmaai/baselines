@@ -338,8 +338,9 @@ def learn(*, network, env, total_timesteps, seed=None, nsteps=2048, ent_coef=0.0
 
     # Start total timer
     tfirststart = time.time()
-
+    
     nupdates = total_timesteps//nbatch
+    logger.log('Training Parameters:\ntotal_timesteps {} nsteps {} nbatch {} nupdates {}'.format(total_timesteps,nsteps,nbatch,nupdates))
     for update in range(1, nupdates+1):
         assert nbatch % nminibatches == 0
         # Start timer

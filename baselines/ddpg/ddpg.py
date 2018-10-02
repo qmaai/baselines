@@ -8,19 +8,20 @@ import tensorflow.contrib as tc
 from baselines import logger
 from baselines.common.mpi_adam import MpiAdam
 import baselines.common.tf_util as U
-from baselines.common.mpi_running_mean_std import RunningMeanStd
+# from baselines.common.mpi_running_mean_std import RunningMeanStd
+from baselines.common.running_mean_std import TfRunningMeanStd
 from mpi4py import MPI
 
 def normalize(x, stats):
     if stats is None:
         return x
-    return (x - stats.mean) / stats.std
+    return (x - stats.mean) / stats.var
 
 
 def denormalize(x, stats):
     if stats is None:
         return x
-    return x * stats.std + stats.mean
+    return x * stats.var + stats.mean
 
 def reduce_std(x, axis=None, keepdims=False):
     return tf.sqrt(reduce_var(x, axis=axis, keepdims=keepdims))
@@ -100,7 +101,7 @@ class DDPG(object):
         # Observation normalization.
         if self.normalize_observations:
             with tf.variable_scope('obs_rms'):
-                self.obs_rms = RunningMeanStd(shape=observation_shape)
+                self.obs_rms = TfRunningMeanStd(shape=observation_shape,scope='running_mean_std')
         else:
             self.obs_rms = None
         normalized_obs0 = tf.clip_by_value(normalize(self.obs0, self.obs_rms),
@@ -111,7 +112,7 @@ class DDPG(object):
         # Return normalization.
         if self.normalize_returns:
             with tf.variable_scope('ret_rms'):
-                self.ret_rms = RunningMeanStd()
+                self.ret_rms = TfRunningMeanStd()
         else:
             self.ret_rms = None
 
@@ -201,7 +202,7 @@ class DDPG(object):
     def setup_popart(self):
         # See https://arxiv.org/pdf/1602.07714.pdf for details.
         self.old_std = tf.placeholder(tf.float32, shape=[1], name='old_std')
-        new_std = self.ret_rms.std
+        new_std = self.ret_rms.var
         self.old_mean = tf.placeholder(tf.float32, shape=[1], name='old_mean')
         new_mean = self.ret_rms.mean
 
@@ -221,11 +222,11 @@ class DDPG(object):
         names = []
 
         if self.normalize_returns:
-            ops += [self.ret_rms.mean, self.ret_rms.std]
+            ops += [self.ret_rms.mean, self.ret_rms.var]
             names += ['ret_rms_mean', 'ret_rms_std']
 
         if self.normalize_observations:
-            ops += [tf.reduce_mean(self.obs_rms.mean), tf.reduce_mean(self.obs_rms.std)]
+            ops += [tf.reduce_mean(self.obs_rms.mean), tf.reduce_mean(self.obs_rms.var)]
             names += ['obs_rms_mean', 'obs_rms_std']
 
         ops += [tf.reduce_mean(self.critic_tf)]
@@ -252,7 +253,13 @@ class DDPG(object):
         self.stats_ops = ops
         self.stats_names = names
 
-    def pi(self, obs, apply_noise=True, compute_Q=True):
+    def report_exploration_var(self):
+        if self.action_noise is not None:
+            return self.action_noise.get_var()
+        else:
+            return None
+
+    def pi(self, obs, apply_noise=True, compute_Q=True,timestep=0):
         if self.param_noise is not None and apply_noise:
             actor_tf = self.perturbed_actor_tf
         else:
@@ -265,7 +272,7 @@ class DDPG(object):
             q = None
         action = action.flatten()
         if self.action_noise is not None and apply_noise:
-            noise = self.action_noise()
+            noise = self.action_noise(timestep)
             assert noise.shape == action.shape
             action += noise
         action = np.clip(action, self.action_range[0], self.action_range[1])
@@ -282,7 +289,7 @@ class DDPG(object):
         batch = self.memory.sample(batch_size=self.batch_size)
 
         if self.normalize_returns and self.enable_popart:
-            old_mean, old_std, target_Q = self.sess.run([self.ret_rms.mean, self.ret_rms.std, self.target_Q], feed_dict={
+            old_mean, old_std, target_Q = self.sess.run([self.ret_rms.mean, self.ret_rms.var, self.target_Q], feed_dict={
                 self.obs1: batch['obs1'],
                 self.rewards: batch['rewards'],
                 self.terminals1: batch['terminals1'].astype('float32'),
@@ -295,7 +302,7 @@ class DDPG(object):
 
             # Run sanity check. Disabled by default since it slows down things considerably.
             # print('running sanity check')
-            # target_Q_new, new_mean, new_std = self.sess.run([self.target_Q, self.ret_rms.mean, self.ret_rms.std], feed_dict={
+            # target_Q_new, new_mean, new_std = self.sess.run([self.target_Q, self.ret_rms.mean, self.ret_rms.var], feed_dict={
             #     self.obs1: batch['obs1'],
             #     self.rewards: batch['rewards'],
             #     self.terminals1: batch['terminals1'].astype('float32'),
@@ -323,7 +330,7 @@ class DDPG(object):
 
     def initialize(self, sess):
         self.sess = sess
-        self.sess.run(tf.global_variables_initializer())
+        # self.sess.run(tf.global_variables_initializer()) # Move this out to the training.py
         self.actor_optimizer.sync()
         self.critic_optimizer.sync()
         self.sess.run(self.target_init_updates)

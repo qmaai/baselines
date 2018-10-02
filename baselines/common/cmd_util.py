@@ -17,7 +17,7 @@ from baselines.common.atari_wrappers import make_atari, wrap_deepmind
 from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
 from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
 from baselines.common.retro_wrappers import RewardScaler
-
+import time
 
 def make_vec_env(env_id, env_type, num_env, seed, wrapper_kwargs=None, start_index=0, reward_scale=1.0,env_args=None):
     """
@@ -35,7 +35,7 @@ def make_vec_env(env_id, env_type, num_env, seed, wrapper_kwargs=None, start_ind
                 timestep_limit = vrep_args_dict['timestep_limit'] if 'timestep_limit' in vrep_args_dict.keys() else None  
                 logger.log(str(env_id.split(':')[-1])+'is constructed with parameters as such:')
                 logger.log(vrep_args_dict)
-                env = make_vrep.make_vrep(env_id,max_episode_steps=timestep_limit,**vrep_args_dict)
+                env = make_vrep.make_vrep(env_id,remote_port=rank+20000,max_episode_steps=timestep_limit,**vrep_args_dict)
             else:
                 env = gym.make(env_id)
             env.seed(seed + 10000*mpi_rank + rank if seed is not None else None)

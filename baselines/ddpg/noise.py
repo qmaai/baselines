@@ -34,16 +34,28 @@ class ActionNoise(object):
 
 
 class NormalActionNoise(ActionNoise):
-    def __init__(self, mu, sigma):
+    def __init__(self, mu, sigma, min_sigma=0.01, decay_period=2e5):
         self.mu = mu
-        self.sigma = sigma
+        self.max_sigma = sigma
+        self.min_sigma = min_sigma
+        self.decay_period = decay_period
+        self.curr_sigma = sigma        
 
-    def __call__(self):
-        return np.random.normal(self.mu, self.sigma)
+    def __call__(self,t=0):
+        '''
+        added Variance annealing schedule.
+        '''
+        assert t>=0
+        if t >= self.decay_period:
+            t = self.decay_period
+        self.curr_sigma = self.max_sigma - (self.max_sigma-self.min_sigma)*int(t)/self.decay_period
+        return np.random.normal(self.mu, self.curr_sigma)
 
-    def __repr__(self):
-        return 'NormalActionNoise(mu={}, sigma={})'.format(self.mu, self.sigma)
+    def __repr__(self,tabular=True):
+        return 'NormalActionNoise(mu={}, sigma={})'.format(self.mu, self.curr_sigma)
 
+    def get_var(self):
+        return self.curr_sigma 
 
 # Based on http://math.stackexchange.com/questions/1287634/implementing-ornstein-uhlenbeck-in-matlab
 class OrnsteinUhlenbeckActionNoise(ActionNoise):

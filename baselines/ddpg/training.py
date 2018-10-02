@@ -15,7 +15,7 @@ from mpi4py import MPI
 def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, param_noise, actor, critic,
     normalize_returns, normalize_observations, critic_l2_reg, actor_lr, critic_lr, action_noise,
     popart, gamma, clip_norm, nb_train_steps, nb_rollout_steps, nb_eval_steps, batch_size, memory,
-    tau=0.01, eval_env=None, param_noise_adaption_interval=50):
+    tau=0.01, eval_env=None, param_noise_adaption_interval=50,load_path=None):
     rank = MPI.COMM_WORLD.Get_rank()
 
     assert (np.abs(env.action_space.low) == env.action_space.high).all()  # we assume symmetric actions.
@@ -31,7 +31,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
 
     # Set up logging stuff only for a single worker.
     if rank == 0:
-        saver = tf.train.Saver()
+        saver = tf.train.Saver(max_to_keep=100)
     else:
         saver = None
 
@@ -40,7 +40,13 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
     eval_episode_rewards_history = deque(maxlen=100)
     episode_rewards_history = deque(maxlen=100)
     with U.single_threaded_session() as sess:
-        # Prepare everything.
+        if load_path!=None:
+            logger.info('load model from path'+str(load_path))
+            saver.restore(sess,tf.train.latest_checkpoint(load_path+'/models/'))
+        else:
+            logger.info('building from scrach')
+            sess.run(tf.global_variables_initializer())
+
         agent.initialize(sess)
         sess.graph.finalize()
 
@@ -64,13 +70,18 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
         epoch_start_time = time.time()
         epoch_actions = []
         epoch_qs = []
-        epoch_episodes = 0
         for epoch in range(nb_epochs):
+            curr_epoch_episodes = 0
+            curr_epoch_actions = []
             for cycle in range(nb_epoch_cycles):
                 # Perform rollouts.
+                roll_out_episode = 0
                 for t_rollout in range(nb_rollout_steps):
+                    
                     # Predict next action.
-                    action, q = agent.pi(obs, apply_noise=True, compute_Q=True)
+                    cur_timestep = epoch*nb_epoch_cycles*nb_rollout_steps+cycle*nb_rollout_steps+t_rollout
+                    action, q = agent.pi(obs, apply_noise=True, compute_Q=True, timestep=cur_timestep)
+                
                     assert action.shape == env.action_space.shape
 
                     # Execute next action.
@@ -85,6 +96,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                     episode_step += 1
 
                     # Book-keeping.
+                    curr_epoch_actions.append(action)
                     epoch_actions.append(action)
                     epoch_qs.append(q)
                     agent.store_transition(obs, action, r, new_obs, done)
@@ -97,9 +109,10 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                         epoch_episode_steps.append(episode_step)
                         episode_reward = 0.
                         episode_step = 0
-                        epoch_episodes += 1
+                        curr_epoch_episodes += 1
                         episodes += 1
-
+                        roll_out_episode += 1
+                        
                         agent.reset()
                         obs = env.reset()
 
@@ -137,12 +150,20 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                             eval_episode_rewards_history.append(eval_episode_reward)
                             eval_episode_reward = 0.
 
+
+                print('epoch {}/{}; cycle {}/{}; epoch_episode_reward {};'.format(epoch,nb_epochs,cycle,nb_epoch_cycles,sum(epoch_episode_rewards[-roll_out_episode:])),end='')
+                if eval_env is not None:
+                    print('eval_episode_reward {}'.format(sum(eval_episode_rewards)),end='')
+                print('\n',end='')
+
             mpi_size = MPI.COMM_WORLD.Get_size()
             # Log stats.
             # XXX shouldn't call np.mean on variable length lists
             duration = time.time() - start_time
             stats = agent.get_stats()
             combined_stats = stats.copy()
+            ### This information log is intolerable. Why is all statistics cumulated?
+            ### I am adding log that illustrates the stats of each episode
             combined_stats['rollout/return'] = np.mean(epoch_episode_rewards)
             combined_stats['rollout/return_history'] = np.mean(episode_rewards_history)
             combined_stats['rollout/episode_steps'] = np.mean(epoch_episode_steps)
@@ -154,8 +175,22 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
             combined_stats['total/duration'] = duration
             combined_stats['total/steps_per_second'] = float(t) / float(duration)
             combined_stats['total/episodes'] = episodes
-            combined_stats['rollout/episodes'] = epoch_episodes
+            combined_stats['rollout/episodes'] = roll_out_episode
             combined_stats['rollout/actions_std'] = np.std(epoch_actions)
+            # Adding curr_epoch stats
+            combined_stats['curr_epoch/nb_episodes'] = curr_epoch_episodes
+            combined_stats['curr_epoch/nb_ep_steps'] = int(nb_epoch_cycles*nb_rollout_steps/curr_epoch_episodes)
+            combined_stats['curr_epoch/mean_reward'] = np.mean(epoch_episode_rewards[-curr_epoch_episodes:])
+            combined_stats['curr_epoch/action_std'] = agent.report_exploration_var()[0]
+            combined_stats['curr_epoch/mean_action1'] = np.mean(curr_epoch_actions,axis=0)[0] 
+            combined_stats['curr_epoch/mean_action2'] = np.mean(curr_epoch_actions,axis=0)[1] 
+            combined_stats['curr_epoch/mean_action3'] = np.mean(curr_epoch_actions,axis=0)[2]
+            combined_stats['curr_epoch/mean_action4'] = np.mean(curr_epoch_actions,axis=0)[3]
+            combined_stats['curr_epoch/std_action1'] = np.std(curr_epoch_actions,axis=0)[0]
+            combined_stats['curr_epoch/std_action2'] = np.std(curr_epoch_actions,axis=0)[1]
+            combined_stats['curr_epoch/std_action3'] = np.std(curr_epoch_actions,axis=0)[2]
+            combined_stats['curr_epoch/std_action4'] = np.std(curr_epoch_actions,axis=0)[3]
+
             # Evaluation statistics.
             if eval_env is not None:
                 combined_stats['eval/return'] = eval_episode_rewards
@@ -182,6 +217,10 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
             logger.dump_tabular()
             logger.info('')
             logdir = logger.get_dir()
+            if saver is not None:
+                saver.save(sess,logdir+'/models/ddpg',global_step=epoch)
+                logger.info('model saved for epoch '+str(epoch)+' at '+str(logdir))
+
             if rank == 0 and logdir:
                 if hasattr(env, 'get_state'):
                     with open(os.path.join(logdir, 'env_state.pkl'), 'wb') as f:

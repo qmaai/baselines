@@ -54,7 +54,6 @@ class Model(object):
         CLIPRANGE = tf.placeholder(tf.float32, [])
 
         neglogpac = train_model.pd.neglogp(A)
-
         # Calculate the entropy
         # Entropy is used to improve exploration by limiting the premature convergence to suboptimal policy.
         entropy = tf.reduce_mean(train_model.pd.entropy())
@@ -229,6 +228,7 @@ class Runner(AbstractEnvRunner):
             mb_advs[t] = lastgaelam = delta + self.gamma * self.lam * nextnonterminal * lastgaelam
         # Returns
         mb_returns = mb_advs + mb_values
+
         return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs)),
             mb_states, epinfos)
 # obs, returns, masks, actions, values, neglogpacs, states = runner.run()

@@ -1,6 +1,7 @@
 import numpy as np
 from multiprocessing import Process, Pipe
 from . import VecEnv, CloudpickleWrapper
+import time
 
 def worker(remote, parent_remote, env_fn_wrapper):
     parent_remote.close()
@@ -51,6 +52,10 @@ class SubprocVecEnv(VecEnv):
         for p in self.ps:
             p.daemon = True  # if the main process crashes, we should not cause things to hang
             p.start()
+            # wait for the thread to fully initilize vrep before starting next thread
+            # Otherwise vrep shall fail closing the right pid when calling env.close()
+            time.sleep(8)
+            
         for remote in self.work_remotes:
             remote.close()
 

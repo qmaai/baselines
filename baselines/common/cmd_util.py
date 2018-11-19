@@ -36,6 +36,13 @@ def make_vec_env(env_id, env_type, num_env, seed, wrapper_kwargs=None, start_ind
                 logger.log(str(env_id.split(':')[-1])+'is constructed with parameters as such:')
                 logger.log(vrep_args_dict)
                 env = make_vrep.make_vrep(env_id,remote_port=rank+20000,max_episode_steps=timestep_limit,**vrep_args_dict)
+            elif env_type == 'airgym':
+                from airgym import make_airgym
+                airgym_args_dict = parse_unknown_args(env_args,make_airgym.airgym_full_arguments_dict)
+                timestep_limit = airgym_args_dict['timestep_limit'] if 'timestep_limit' in airgym_args_dict.keys() else None
+                logger.log(str(env_id.split(':')[-1])+'is constructed with parameters as such:')
+                logger.log(airgym_args_dict)
+                env = make_airgym.make_airgym(env_id,max_episode_steps=timestep_limit,**airgym_args_dict)
             else:
                 env = gym.make(env_id)
             env.seed(seed + 10000*mpi_rank + rank if seed is not None else None)
@@ -103,22 +110,22 @@ def common_arg_parser():
     Create an argparse.ArgumentParser for run_mujoco.py.
     """
     parser = arg_parser()
-	# vrep_base environment related arguments
-    parser.add_argument('--vrep_path',help='absolute path of vrep',type=str,default='/home/elessar/reinforcement/vrep_baselines/V-REP_PRO_EDU_V3_3_2_64_Linux')
-    parser.add_argument('--frame_skip',type=int,default=1)
-    parser.add_argument('--timestep_limit',type=int,default=500)
-    parser.add_argument('--obs_type',type=str,default='state')
-    parser.add_argument('--state_type',type=str,default='world')
-    parser.add_argument('--headless',default=False,action='store_true')
-    parser.add_argument('--random_start',default=False,action='store_true')
-    parser.add_argument('--server_silent',default=False,action='store_true')
+    # vrep_base environment related arguments
+    parser.add_argument('--vrep_path',help='absolute path of vrep',type=str,default=None)
+    parser.add_argument('--frame_skip',type=int,default=None)
+    parser.add_argument('--timestep_limit',type=int,default=None)
+    parser.add_argument('--obs_type',type=str,default=None)
+    parser.add_argument('--state_type',type=str,default=None)
+    parser.add_argument('--headless',default=None,action='store_true')
+    parser.add_argument('--random_start',default=None,action='store_true')
+    parser.add_argument('--server_silent',default=None,action='store_true')
     # vrep_env environment related arguments
-    parser.add_argument('--env', help='environment class', type=str, default='vrepgym.vrep_motor_env:VREPMotorEnv')
-    parser.add_argument('--scene_path',help='environement scene path',type=str,default='motor_control.ttt')
+    parser.add_argument('--env', help='environment class', type=str, default=None)
+    parser.add_argument('--scene_path',help='environement scene path',type=str,default=None)
     parser.add_argument('--log',help='log into console and files',default=False,action='store_true')
     # parser.add_argument('--reward_baseline',type=float,default=2.95)
-    parser.add_argument('--terminal_penalty',type=float,default=0)
-    parser.add_argument('--reward_func',type=float,default=1)
+    parser.add_argument('--terminal_penalty',type=float,default=None)
+    parser.add_argument('--reward_func',type=float,default=None)
     # algorithm and network related arguments
     parser.add_argument('--seed', help='RNG seed', type=int, default=None)
     parser.add_argument('--alg', help='Algorithm', type=str, default='ppo2')
@@ -129,6 +136,14 @@ def common_arg_parser():
     parser.add_argument('--reward_scale', help='Reward scale factor. Default: 1.0', default=1.0, type=float)
     parser.add_argument('--save_path', help='Path to save trained model to', default=None, type=str)
     parser.add_argument('--play', default=False, action='store_true')
+
+    # airgym related arguments 
+    parser.add_argument('--step_duration',help='duration of each step/action',type=float,default=None)
+    parser.add_argument('--initX',help='inital x position',type=int,default=None)
+    parser.add_argument('--initY',help='inital y position',type=int,default=None)
+    parser.add_argument('--initZ',help='inital z position',type=int,default=None)
+    parser.add_argument('--target_name',help='target id that drone wants to track',type=str,default=None)
+
     return parser
 
 def robotics_arg_parser():

@@ -19,7 +19,7 @@ import gym
 import tensorflow as tf
 from mpi4py import MPI
 
-def run(env_args,env_id, seed, noise_type, layer_norm, evaluation, hidden_unit, layer_num,**kwargs):
+def run(env_args,env_id, seed, noise_type, layer_norm, evaluation, hidden_unit, layer_num,explore_ratio=1/2,**kwargs):
     # Configure things.
     rank = MPI.COMM_WORLD.Get_rank()
     if rank != 0:
@@ -56,8 +56,8 @@ def run(env_args,env_id, seed, noise_type, layer_norm, evaluation, hidden_unit, 
             param_noise = AdaptiveParamNoiseSpec(initial_stddev=float(stddev), desired_action_stddev=float(stddev))
         elif 'normal' in current_noise_type:
             _, stddev = current_noise_type.split('_')
-            total_timestep = kwargs['nb_epochs']*kwargs['nb_epoch_cycles']*kwargs['nb_rollout_steps']
-            action_noise = NormalActionNoise(mu=np.zeros(nb_actions),sigma=float(stddev)*np.ones(nb_actions),decay_period=total_timestep)
+            exp_timestep = int(explore_ratio*kwargs['nb_epochs']*kwargs['nb_epoch_cycles']*kwargs['nb_rollout_steps'])
+            action_noise = NormalActionNoise(mu=np.zeros(nb_actions),sigma=float(stddev)*np.ones(nb_actions),decay_period=exp_timestep)
         elif 'ou' in current_noise_type:
             _, stddev = current_noise_type.split('_')
             action_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
@@ -127,16 +127,19 @@ def parse_args():
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--reward-scale', type=float, default=1.)
     parser.add_argument('--clip-norm', type=float, default=None)
-    parser.add_argument('--nb-epochs', type=int, default=100)  # with default settings, perform 1M steps total
+    parser.add_argument('--nb-epochs', type=int, default=100)  # with default settings, perform 2e5 steps total
     parser.add_argument('--nb-epoch-cycles', type=int, default=20) # number of roll out times per epoch
     parser.add_argument('--nb-train-steps', type=int, default=500)  # per epoch cycle and MPI worker
     parser.add_argument('--nb-eval-steps', type=int, default=500)  # per epoch cycle and MPI worker
     parser.add_argument('--nb-rollout-steps', type=int, default=100)  # per epoch cycle and MPI worker
     parser.add_argument('--noise-type', type=str, default='normal_0.99') #'adaptive-param_0.2')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
+    parser.add_argument('--explore_ratio',type=float,default=1,help='portion of timesteps applying annealing of action noise')
     parser.add_argument('--num-timesteps', type=int, default=None)
     boolean_flag(parser, 'evaluation', default=False)
     parser.add_argument('--load_path',type=str,default=None)
     args = parser.parse_args()
+    # explore ratio has to be less than 1
+    assert args.explore_ratio<=1
     # we don't directly specify timesteps for this script, so make sure that if we do specify them
     # they agree with the other parameters
     if args.num_timesteps is not None:

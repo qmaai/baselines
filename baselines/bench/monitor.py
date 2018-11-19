@@ -128,6 +128,7 @@ def get_monitor_files(dir):
 
 def load_results(dir):
     import pandas
+    
     monitor_files = (
         glob(osp.join(dir, "*monitor.json")) +
         glob(osp.join(dir, "*monitor.csv"))) # get both csv and (old) json files

@@ -48,7 +48,7 @@ class NormalActionNoise(ActionNoise):
         assert t>=0
         if t >= self.decay_period:
             t = self.decay_period
-        self.curr_sigma = self.max_sigma - (self.max_sigma-self.min_sigma)*int(t)/self.decay_period
+        self.curr_sigma = self.max_sigma - (self.max_sigma-self.min_sigma)*min(1,int(t)/self.decay_period)
         return np.random.normal(self.mu, self.curr_sigma)
 
     def __repr__(self,tabular=True):
